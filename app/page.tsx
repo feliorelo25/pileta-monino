@@ -1,113 +1,186 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { SLOTS } from "@/lib/slots";
 
-const SLOTS = [
-  { id: "mañana", label: "☀️ Mañana (10:00 – 13:30)" },
-  { id: "tarde", label: "🌤️ Tarde (13:30 – 19:00)" },
-  { id: "noche", label: "🌙 Noche (19:00 – 22:30)" },
-];
+type Booking = { slot: string; name: string };
 
 function todayISO() {
   return new Date().toISOString().split("T")[0];
 }
+function ymFromDate(date: string) {
+  return date.slice(0, 7);
+}
+function toDateParts(ym: string) {
+  const [y, m] = ym.split("-").map(Number);
+  return { y, m };
+}
+function daysInMonth(y: number, m: number) {
+  return new Date(y, m, 0).getDate();
+}
+function weekdayOfFirst(y: number, m: number) {
+  return new Date(y, m - 1, 1).getDay();
+}
 
 export default function Page() {
   const [date, setDate] = useState(todayISO());
-  const [slot, setSlot] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [taken, setTaken] = useState<string[]>([]);
-  const [status, setStatus] = useState<string>("");
+  const [status, setStatus] = useState("");
 
+  const [monthMap, setMonthMap] = useState<Record<string, Booking[]>>({});
+  const [dayBookings, setDayBookings] = useState<Booking[]>([]);
+
+  const ym = ymFromDate(date);
+  const { y, m } = useMemo(() => toDateParts(ym), [ym]);
+
+  // Month summary (colors)
+  useEffect(() => {
+    fetch(`/api/month?ym=${encodeURIComponent(ym)}`, { cache: "no-store" })
+      .then((r) => r.json())
+      .then((j) => setMonthMap(j && typeof j.byDate === "object" ? j.byDate : {}))
+      .catch(() => setMonthMap({}));
+  }, [ym]);
+
+  // Day detail (who booked what)
   useEffect(() => {
     setStatus("");
-    fetch(`/api/availability?date=${encodeURIComponent(date)}`)
+    fetch(`/api/day?date=${encodeURIComponent(date)}`, { cache: "no-store" })
       .then((r) => r.json())
-      .then((j) => setTaken(Array.isArray(j.taken) ? j.taken : []))
-      .catch(() => setTaken([]));
+      .then((j) => setDayBookings(Array.isArray(j.bookings) ? j.bookings : []))
+      .catch(() => setDayBookings([]));
   }, [date]);
 
-  const takenSet = useMemo(() => new Set(taken), [taken]);
+  const bySlot = useMemo(() => {
+    const map = new Map<string, Booking>();
+    dayBookings.forEach((b) => map.set(b.slot, b));
+    return map;
+  }, [dayBookings]);
 
-  async function reservar() {
+  async function refresh() {
+    const d = await fetch(`/api/day?date=${encodeURIComponent(date)}`, { cache: "no-store" }).then((r) => r.json());
+    setDayBookings(Array.isArray(d.bookings) ? d.bookings : []);
+
+    const mo = await fetch(`/api/month?ym=${encodeURIComponent(ym)}`, { cache: "no-store" }).then((r) => r.json());
+    setMonthMap(mo && typeof mo.byDate === "object" ? mo.byDate : {});
+  }
+
+  async function reservar(slot: string) {
     setStatus("");
-    if (!slot) return setStatus("Elegí un turno");
     if (!name.trim()) return setStatus("Poné tu nombre");
-    if (takenSet.has(slot)) return setStatus("Ese turno ya está ocupado");
 
     const res = await fetch("/api/book", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ date, slot, name }),
     });
-
     const j = await res.json().catch(() => ({}));
     if (!res.ok) return setStatus(j.error || "Error reservando");
 
     setStatus("Reserva confirmada ✅");
+    await refresh();
+  }
 
-    // refrescar ocupados
-    const a = await fetch(`/api/availability?date=${encodeURIComponent(date)}`).then((r) =>
-      r.json()
-    );
-    setTaken(Array.isArray(a.taken) ? a.taken : []);
+  async function cancelar(slot: string) {
+    setStatus("");
+    const res = await fetch("/api/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date, slot }),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) return setStatus(j.error || "Error cancelando");
+
+    setStatus("Reserva eliminada 🗑️");
+    await refresh();
+  }
+
+  // Calendar cells
+  const calCells = useMemo(() => {
+    const totalDays = daysInMonth(y, m);
+    const firstW = weekdayOfFirst(y, m);
+    const cells: (null | { day: number; iso: string; count: number })[] = [];
+
+    for (let i = 0; i < firstW; i++) cells.push(null);
+
+    for (let d = 1; d <= totalDays; d++) {
+      const mm = String(m).padStart(2, "0");
+      const dd = String(d).padStart(2, "0");
+      const iso = `${y}-${mm}-${dd}`;
+      const count = monthMap[iso]?.length ?? 0;
+      cells.push({ day: d, iso, count });
+    }
+
+    while (cells.length % 7 !== 0) cells.push(null);
+    return cells;
+  }, [y, m, monthMap]);
+
+  const monthLabel = useMemo(() => {
+    const d = new Date(y, m - 1, 1);
+    return d.toLocaleString("es-AR", { month: "long", year: "numeric" });
+  }, [y, m]);
+
+  const maxSlots = SLOTS.length;
+  function dayBg(count: number, selected: boolean) {
+    if (selected) return "#333";
+    if (count === 0) return "rgba(0, 200, 120, 0.12)";
+    if (count < maxSlots) return "rgba(255, 200, 0, 0.12)";
+    return "rgba(255, 80, 80, 0.12)";
   }
 
   return (
     <main style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-      <div style={{ maxWidth: 520, width: "100%", padding: 24 }}>
-        <h1 style={{ fontSize: 32, fontWeight: 700 }}>🏊‍♂️ Pileta Monino</h1>
-        <p style={{ marginTop: 8, opacity: 0.8 }}>Elegí día y turno</p>
+      <div style={{ maxWidth: 640, width: "100%", padding: 24 }}>
+        <h1 style={{ fontSize: 32, fontWeight: 800 }}>🏊‍♂️ Pileta Monino</h1>
+        <p style={{ marginTop: 8, opacity: 0.8 }}>Elegí un día y reservá un turno.</p>
 
-        <div style={{ marginTop: 24 }}>
-          <label style={{ fontWeight: 500 }}>Día</label>
-          <input
-            type="date"
-            value={date}
-            min={todayISO()}
-            onChange={(e) => setDate(e.target.value)}
-            onClick={(e) => (e.currentTarget as any).showPicker?.()}
-            style={{
-              display: "block",
-              marginTop: 8,
-              padding: 10,
-              width: "100%",
-              fontSize: 16,
-              cursor: "pointer",
-            }}
-          />
-        </div>
+        {/* Calendar */}
+        <div style={{ marginTop: 18, border: "1px solid #333", borderRadius: 14, padding: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <div style={{ fontWeight: 800 }}>Calendario</div>
+            <div style={{ opacity: 0.8 }}>{monthLabel}</div>
+          </div>
 
-        <div style={{ marginTop: 24 }}>
-          <label style={{ fontWeight: 500 }}>Turno</label>
-          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
-            {SLOTS.map((s) => {
-              const ocupado = takenSet.has(s.id);
+          <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, opacity: 0.7 }}>
+            {["D", "L", "M", "M", "J", "V", "S"].map((w, i) => (
+              <div key={`${w}-${i}`} style={{ textAlign: "center", fontSize: 12 }}>{w}</div>
+            ))}
+          </div>
+
+          <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8 }}>
+            {calCells.map((c, idx) => {
+              if (!c) return <div key={idx} style={{ height: 42 }} />;
+              const selected = c.iso === date;
               return (
                 <button
-                  key={s.id}
-                  onClick={() => !ocupado && setSlot(s.id)}
-                  disabled={ocupado}
+                  key={c.iso}
+                  onClick={() => setDate(c.iso)}
                   style={{
-                    padding: 12,
+                    height: 42,
                     borderRadius: 10,
                     border: "1px solid #444",
-                    background: slot === s.id ? "#333" : "transparent",
+                    background: dayBg(c.count, selected),
                     color: "white",
-                    cursor: ocupado ? "not-allowed" : "pointer",
-                    fontSize: 15,
-                    opacity: ocupado ? 0.35 : 1,
+                    cursor: "pointer",
                   }}
+                  title={c.count === 0 ? "Libre" : c.count < maxSlots ? "Parcial" : "Completo"}
                 >
-                  {s.label} {ocupado ? "— Ocupado" : ""}
+                  {c.day}
                 </button>
               );
             })}
           </div>
+
+          <div style={{ marginTop: 12, display: "flex", gap: 10, fontSize: 12, opacity: 0.8 }}>
+            <span>🟩 libre</span>
+            <span>🟨 parcial</span>
+            <span>🟥 completo</span>
+            <span style={{ marginLeft: "auto" }}>Día: <strong>{date}</strong></span>
+          </div>
         </div>
 
-        <div style={{ marginTop: 24 }}>
-          <label style={{ fontWeight: 500 }}>Tu nombre</label>
+        {/* Name */}
+        <div style={{ marginTop: 18 }}>
+          <label style={{ fontWeight: 700 }}>Tu nombre</label>
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -118,33 +191,90 @@ export default function Page() {
               padding: 10,
               width: "100%",
               fontSize: 16,
+              borderRadius: 10,
+              border: "1px solid #333",
+              background: "transparent",
+              color: "white",
             }}
           />
         </div>
 
-        <button
-          onClick={reservar}
-          style={{
-            marginTop: 18,
-            padding: 12,
-            width: "100%",
-            borderRadius: 10,
-            border: "1px solid #444",
-            background: "#111",
-            color: "white",
-            cursor: "pointer",
-            fontSize: 16,
-            fontWeight: 600,
-          }}
-        >
-          Reservar
-        </button>
+        {/* Slots */}
+        <div style={{ marginTop: 16, border: "1px solid #333", borderRadius: 14, padding: 16 }}>
+          <div style={{ fontWeight: 900, marginBottom: 10 }}>Turnos para {date}</div>
 
-        {status && (
-          <div style={{ marginTop: 12, opacity: 0.85 }}>
-            {status}
+          <div style={{ display: "grid", gap: 10 }}>
+            {SLOTS.map((s) => {
+              const b = bySlot.get(s.id);
+              const ocupado = !!b;
+
+              return (
+                <div
+                  key={s.id}
+                  style={{
+                    border: "1px solid #444",
+                    borderRadius: 12,
+                    padding: 12,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 12,
+                    opacity: ocupado ? 0.85 : 1,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 800 }}>{s.label}</div>
+                    <div style={{ marginTop: 2, opacity: 0.8, fontSize: 13 }}>
+                      {ocupado ? `Ocupado — ${b?.name}` : "Libre"}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() => reservar(s.id)}
+                      disabled={ocupado}
+                      style={{
+                        border: "1px solid #666",
+                        background: ocupado ? "transparent" : "#111",
+                        color: "white",
+                        borderRadius: 10,
+                        padding: "10px 12px",
+                        cursor: ocupado ? "not-allowed" : "pointer",
+                        fontSize: 14,
+                        fontWeight: 800,
+                        opacity: ocupado ? 0.4 : 1,
+                        minWidth: 110,
+                      }}
+                    >
+                      {ocupado ? "Ocupado" : "Reservar"}
+                    </button>
+
+                    {ocupado && (
+                      <button
+                        onClick={() => cancelar(s.id)}
+                        style={{
+                          border: "1px solid #666",
+                          background: "transparent",
+                          color: "white",
+                          borderRadius: 10,
+                          padding: "10px 12px",
+                          cursor: "pointer",
+                          fontSize: 14,
+                          fontWeight: 800,
+                          opacity: 0.8,
+                        }}
+                      >
+                        Eliminar
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        )}
+
+          {status && <div style={{ marginTop: 12, opacity: 0.9 }}>{status}</div>}
+        </div>
       </div>
     </main>
   );
