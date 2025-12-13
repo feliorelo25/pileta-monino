@@ -1,65 +1,151 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useEffect, useMemo, useState } from "react";
+
+const SLOTS = [
+  { id: "mañana", label: "☀️ Mañana (10:00 – 13:30)" },
+  { id: "tarde", label: "🌤️ Tarde (13:30 – 19:00)" },
+  { id: "noche", label: "🌙 Noche (19:00 – 22:30)" },
+];
+
+function todayISO() {
+  return new Date().toISOString().split("T")[0];
+}
+
+export default function Page() {
+  const [date, setDate] = useState(todayISO());
+  const [slot, setSlot] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [taken, setTaken] = useState<string[]>([]);
+  const [status, setStatus] = useState<string>("");
+
+  useEffect(() => {
+    setStatus("");
+    fetch(`/api/availability?date=${encodeURIComponent(date)}`)
+      .then((r) => r.json())
+      .then((j) => setTaken(Array.isArray(j.taken) ? j.taken : []))
+      .catch(() => setTaken([]));
+  }, [date]);
+
+  const takenSet = useMemo(() => new Set(taken), [taken]);
+
+  async function reservar() {
+    setStatus("");
+    if (!slot) return setStatus("Elegí un turno");
+    if (!name.trim()) return setStatus("Poné tu nombre");
+    if (takenSet.has(slot)) return setStatus("Ese turno ya está ocupado");
+
+    const res = await fetch("/api/book", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ date, slot, name }),
+    });
+
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) return setStatus(j.error || "Error reservando");
+
+    setStatus("Reserva confirmada ✅");
+
+    // refrescar ocupados
+    const a = await fetch(`/api/availability?date=${encodeURIComponent(date)}`).then((r) =>
+      r.json()
+    );
+    setTaken(Array.isArray(a.taken) ? a.taken : []);
+  }
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
+      <div style={{ maxWidth: 520, width: "100%", padding: 24 }}>
+        <h1 style={{ fontSize: 32, fontWeight: 700 }}>🏊‍♂️ Pileta Monino</h1>
+        <p style={{ marginTop: 8, opacity: 0.8 }}>Elegí día y turno</p>
+
+        <div style={{ marginTop: 24 }}>
+          <label style={{ fontWeight: 500 }}>Día</label>
+          <input
+            type="date"
+            value={date}
+            min={todayISO()}
+            onChange={(e) => setDate(e.target.value)}
+            onClick={(e) => (e.currentTarget as any).showPicker?.()}
+            style={{
+              display: "block",
+              marginTop: 8,
+              padding: 10,
+              width: "100%",
+              fontSize: 16,
+              cursor: "pointer",
+            }}
+          />
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div style={{ marginTop: 24 }}>
+          <label style={{ fontWeight: 500 }}>Turno</label>
+          <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
+            {SLOTS.map((s) => {
+              const ocupado = takenSet.has(s.id);
+              return (
+                <button
+                  key={s.id}
+                  onClick={() => !ocupado && setSlot(s.id)}
+                  disabled={ocupado}
+                  style={{
+                    padding: 12,
+                    borderRadius: 10,
+                    border: "1px solid #444",
+                    background: slot === s.id ? "#333" : "transparent",
+                    color: "white",
+                    cursor: ocupado ? "not-allowed" : "pointer",
+                    fontSize: 15,
+                    opacity: ocupado ? 0.35 : 1,
+                  }}
+                >
+                  {s.label} {ocupado ? "— Ocupado" : ""}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </main>
-    </div>
+
+        <div style={{ marginTop: 24 }}>
+          <label style={{ fontWeight: 500 }}>Tu nombre</label>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ej: Felipe"
+            style={{
+              display: "block",
+              marginTop: 8,
+              padding: 10,
+              width: "100%",
+              fontSize: 16,
+            }}
+          />
+        </div>
+
+        <button
+          onClick={reservar}
+          style={{
+            marginTop: 18,
+            padding: 12,
+            width: "100%",
+            borderRadius: 10,
+            border: "1px solid #444",
+            background: "#111",
+            color: "white",
+            cursor: "pointer",
+            fontSize: 16,
+            fontWeight: 600,
+          }}
+        >
+          Reservar
+        </button>
+
+        {status && (
+          <div style={{ marginTop: 12, opacity: 0.85 }}>
+            {status}
+          </div>
+        )}
+      </div>
+    </main>
   );
 }
