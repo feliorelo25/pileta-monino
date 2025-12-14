@@ -22,6 +22,19 @@ function weekdayOfFirst(y: number, m: number) {
   return new Date(y, m - 1, 1).getDay();
 }
 
+// ✅ helpers para navegar meses
+function addMonths(ym: string, delta: number) {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(y, m - 1, 1);
+  d.setMonth(d.getMonth() + delta);
+  const yy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  return `${yy}-${mm}`;
+}
+function firstDayISO(ym: string) {
+  return `${ym}-01`;
+}
+
 export default function Page() {
   const [date, setDate] = useState(todayISO());
   const [name, setName] = useState("");
@@ -30,16 +43,23 @@ export default function Page() {
   const [monthMap, setMonthMap] = useState<Record<string, Booking[]>>({});
   const [dayBookings, setDayBookings] = useState<Booking[]>([]);
 
-  const ym = ymFromDate(date);
-  const { y, m } = useMemo(() => toDateParts(ym), [ym]);
+  // ✅ mes visible (para poder ir a enero/febrero sin depender del date)
+  const [viewYm, setViewYm] = useState(ymFromDate(todayISO()));
 
-  // Month summary (colors)
+  // si el usuario hace click en un día (setDate), el calendario acompaña ese mes
   useEffect(() => {
-    fetch(`/api/month?ym=${encodeURIComponent(ym)}`, { cache: "no-store" })
+    setViewYm(ymFromDate(date));
+  }, [date]);
+
+  const { y, m } = useMemo(() => toDateParts(viewYm), [viewYm]);
+
+  // Month summary (colors) — ahora depende del mes visible
+  useEffect(() => {
+    fetch(`/api/month?ym=${encodeURIComponent(viewYm)}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((j) => setMonthMap(j && typeof j.byDate === "object" ? j.byDate : {}))
       .catch(() => setMonthMap({}));
-  }, [ym]);
+  }, [viewYm]);
 
   // Day detail (who booked what)
   useEffect(() => {
@@ -60,7 +80,7 @@ export default function Page() {
     const d = await fetch(`/api/day?date=${encodeURIComponent(date)}`, { cache: "no-store" }).then((r) => r.json());
     setDayBookings(Array.isArray(d.bookings) ? d.bookings : []);
 
-    const mo = await fetch(`/api/month?ym=${encodeURIComponent(ym)}`, { cache: "no-store" }).then((r) => r.json());
+    const mo = await fetch(`/api/month?ym=${encodeURIComponent(viewYm)}`, { cache: "no-store" }).then((r) => r.json());
     setMonthMap(mo && typeof mo.byDate === "object" ? mo.byDate : {});
   }
 
@@ -94,7 +114,7 @@ export default function Page() {
     await refresh();
   }
 
-  // Calendar cells
+  // Calendar cells (usa y,m del viewYm)
   const calCells = useMemo(() => {
     const totalDays = daysInMonth(y, m);
     const firstW = weekdayOfFirst(y, m);
@@ -135,9 +155,55 @@ export default function Page() {
 
         {/* Calendar */}
         <div style={{ marginTop: 18, border: "1px solid #333", borderRadius: 14, padding: 16 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+          {/* ✅ header con flechas */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div style={{ fontWeight: 800 }}>Calendario</div>
-            <div style={{ opacity: 0.8 }}>{monthLabel}</div>
+
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <button
+                onClick={() => {
+                  const next = addMonths(viewYm, -1);
+                  setViewYm(next);
+                  setDate(firstDayISO(next));
+                }}
+                style={{
+                  border: "1px solid #666",
+                  background: "transparent",
+                  color: "white",
+                  borderRadius: 10,
+                  padding: "6px 10px",
+                  cursor: "pointer",
+                  opacity: 0.9,
+                }}
+                aria-label="Mes anterior"
+                title="Mes anterior"
+              >
+                ←
+              </button>
+
+              <div style={{ opacity: 0.9 }}>{monthLabel}</div>
+
+              <button
+                onClick={() => {
+                  const next = addMonths(viewYm, 1);
+                  setViewYm(next);
+                  setDate(firstDayISO(next));
+                }}
+                style={{
+                  border: "1px solid #666",
+                  background: "transparent",
+                  color: "white",
+                  borderRadius: 10,
+                  padding: "6px 10px",
+                  cursor: "pointer",
+                  opacity: 0.9,
+                }}
+                aria-label="Mes siguiente"
+                title="Mes siguiente"
+              >
+                →
+              </button>
+            </div>
           </div>
 
           <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, opacity: 0.7 }}>
